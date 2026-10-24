@@ -1,0 +1,34 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["jest", "node"]
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    // ⚠️ TypeScript's wildcard include skips dot-directories, so `.storybook`
+    // is invisible to `**/*.ts`. Without these two entries eslint's type-aware
+    // rules cannot parse the Storybook config at all — "was not found by the
+    // project service" — and the config goes unchecked by both tools.
+    ".storybook/**/*.ts",
+    ".storybook/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    ".expo",
+    "dist",
+    "coverage",
+    "reports",
+    ".stryker-tmp",
+    "storybook-static"
+  ]
+}

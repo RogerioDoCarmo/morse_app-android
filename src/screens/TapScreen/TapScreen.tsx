@@ -1,0 +1,597 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLocale } from '@/application/providers/LocaleProvider';
+import { usePorts } from '@/application/providers/PortsProvider';
+import { useSettings } from '@/application/providers/SettingsProvider';
+import { useOutputChannels } from '@/application/useOutputChannels';
+import { Card } from '@/components/Card';
+import { Icon } from '@/components/Icon';
+import { AppFrame } from '@/components/AppFrame';
+import { OutputChannels } from '@/components/OutputChannels';
+import { SignalSurface } from '@/components/SignalSurface';
+import { SignalButton } from '@/components/SignalButton';
+import { Toast } from '@/components/Toast';
+import type { TabName } from '@/components/TabBar';
+import {
+  UNITS,
+  classifyGap,
+  classifyPress,
+  decodeTaps,
+  tapsToMorse,
+  type TapPress,
+} from '@/core/domain/tapping';
+import { encode, type MorseSymbol } from '@/core/domain/morse';
+import { unitMsForWpm } from '@/core/domain/timeline';
+import { theme } from '@/theme';
+
+/** How much one press of the stepper moves the cut-off. */
+
+/** The key's diameter, from the artboard. */
+const KEY_SIZE = 186;
+
+type Props = Readonly<{
+  onSelectTab: (tab: TabName) => void;
+  unavailableTabs: readonly TabName[];
+}>;
+
+/**
+ * Tap input — built from `design/screens/TapDecode.dc.html`.
+ *
+ * Press DURATION is the whole input: the key measures how long it was held
+ * and how long the silence before it lasted, and the domain turns that into
+ * marks. Nothing here decides what a dot is; `classifyPress` does, against a
+ * cut-off the operator sets, because "long" is relative to their own speed.
+ */
+export function TapScreen({ onSelectTab, unavailableTabs }: Props): React.JSX.Element {
+  const { t, locale } = useLocale();
+  const { tts } = usePorts();
+  const insets = useSafeAreaInsets();
+
+  // The cut-off is a saved preference, not screen state: the stepper here and
+  // the slider in Settings move the same value, and it survives a relaunch.
+  const { settings } = useSettings();
+  const unitMs = settings.tapUnitMs;
+  const [presses, setPresses] = useState<readonly TapPress[]>([]);
+  const [down, setDown] = useState(false);
+  /**
+   * True once the silence has run long enough to close the letter.
+   *
+   * The decoded text has already taken that letter by then, so leaving its
+   * marks sitting in the row reads as a letter still being keyed — the text
+   * says A while the row still looks half-finished.
+   */
+  const [closed, setClosed] = useState(false);
+
+  /** When the key went down, and when it last came up. */
+  const pressedAt = useRef(0);
+  const releasedAt = useRef(0);
+  /** Fires when the silence since the last release closes the letter. */
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const morse = useMemo(() => tapsToMorse(presses, unitMs), [presses, unitMs]);
+  const text = useMemo(() => decodeTaps(presses, unitMs), [presses, unitMs]);
+
+  // What was tapped in goes back out the same four ways the Translator offers.
+  // A tester came here looking for it and found the key was input only.
+  //
+  // ⚠️ `playbackWpm`, not `unitMs`. This screen's unit is the cut-off that
+  // decides a dot from a dash in a HUMAN's keying; playback speed is a
+  // separate setting, and the domain says so in as many words. Keying slowly
+  // and listening quickly is a reasonable thing to want.
+  const message = useMemo(() => encode(text), [text]);
+  const { permission } = usePorts();
+  const { playback, cells, lightDenied, dismissLightDenied } = useOutputChannels(
+    message,
+    unitMsForWpm(settings.playbackWpm),
+  );
+
+  // While the screen is carrying the message, the square IS the message. Without
+  // this the Screen channel switched on and nothing happened: the toggle worked,
+  // the run started, and no surface existed to flash.
+  const showSurface = playback.playing && playback.channels.screen;
+
+  /**
+   * The marks of the letter still being keyed.
+   *
+   * Everything after the last gap that closed a letter. Shown live because a
+   * key that gives no feedback until the letter ends is unusable — you cannot
+   * tell a dot you meant from a dash you fumbled.
+   */
+  const letter = useMemo((): readonly MorseSymbol[] => {
+    const marks: MorseSymbol[] = [];
+    presses.forEach((press, index) => {
+      if (index > 0 && classifyGap(press.gapBeforeMs, unitMs) !== 'intra') {
+        marks.length = 0;
+      }
+      marks.push(classifyPress(press.durationMs, unitMs));
+    });
+    return marks;
+  }, [presses, unitMs]);
+
+  const stopClosing = useCallback((): void => {
+    if (closing.current !== null) clearTimeout(closing.current);
+    closing.current = null;
+  }, []);
+
+  /** What the row actually shows: nothing once the letter has been committed. */
+  const shown = closed ? [] : letter;
+
+  /**
+   * Whether the press being held has already earned a dash.
+   *
+   * ⚠️ THE ONE THING THIS SCREEN COULD NOT TELL YOU. The rule is written on
+   * screen — "Hold the key for a dash, tap it for a dot" — and the key draws
+   * both marks. What neither could say is HOW LONG a hold is, because the
+   * threshold is a setting measured in milliseconds nobody can feel. You
+   * pressed, released, and only then found out what you had made; a wrong mark
+   * gave no clue why it was wrong.
+   *
+   * So the key now says which mark it is making WHILE the key is down. One or
+   * two presses and the boundary is learned by hand rather than read.
+   */
+  const [holdingDash, setHoldingDash] = useState(false);
+  const dashAt = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stopDashTimer = useCallback((): void => {
+    if (dashAt.current !== null) clearTimeout(dashAt.current);
+    dashAt.current = null;
+  }, []);
+
+  // A held key with a timer still running outlives the screen otherwise, and
+  // this one is a tab away from everything.
+  useEffect(() => stopDashTimer, [stopDashTimer]);
+
+  const onDown = useCallback((): void => {
+    stopClosing();
+    setClosed(false);
+    pressedAt.current = Date.now();
+    setDown(true);
+    // The same threshold the decoder uses, so what the key promises is what
+    // the letter row is about to show.
+    setHoldingDash(false);
+    stopDashTimer();
+    dashAt.current = setTimeout(() => {
+      setHoldingDash(true);
+    }, UNITS.dashThreshold * unitMs);
+  }, [stopClosing, stopDashTimer, unitMs]);
+
+  const onUp = useCallback((): void => {
+    stopDashTimer();
+    setHoldingDash(false);
+    const now = Date.now();
+    const durationMs = now - pressedAt.current;
+    // The gap before the FIRST press has no preceding letter to close, and the
+    // domain ignores it — but it still has to be a number.
+    const gapBeforeMs =
+      releasedAt.current === 0 ? 0 : pressedAt.current - releasedAt.current;
+    releasedAt.current = now;
+    setDown(false);
+    setPresses((previous) => [...previous, { durationMs, gapBeforeMs }]);
+
+    // Same threshold the domain uses to decide the gap has closed a letter,
+    // so the row empties at exactly the moment the letter was committed.
+    stopClosing();
+    closing.current = setTimeout(() => {
+      setClosed(true);
+    }, UNITS.letterGap * unitMs);
+  }, [stopClosing, stopDashTimer, unitMs]);
+
+  // The decoded text read back in the app language. AGENTS.md asks for this
+  // on tap input specifically: keying a message you cannot hear is how you
+  // find out you keyed it wrong only after reading it.
+  const readAloud = useCallback((): void => {
+    void tts.speak(text, locale);
+  }, [locale, text, tts]);
+
+  /**
+   * Undoes the last thing keyed.
+   *
+   * One press, not one letter: everything on this screen is derived from the
+   * press list, so removing the last press is exactly what the operator did
+   * last — whether that mark had already closed a letter or not.
+   *
+   * The letter row comes back and the closing timer restarts, so the state
+   * afterwards is the state they would have been in had they never keyed it.
+   * `releasedAt` moves to now for the same reason: the next press should be
+   * spaced from the correction, not from the mark that is no longer there.
+   */
+  const back = useCallback((): void => {
+    stopClosing();
+    setPresses((previous) => previous.slice(0, -1));
+    // Outside the updater: React may run one of those twice, and moving the
+    // clock is a side effect that must happen exactly once.
+    releasedAt.current = presses.length <= 1 ? 0 : Date.now();
+    setClosed(false);
+    closing.current = setTimeout(() => {
+      setClosed(true);
+    }, UNITS.letterGap * unitMs);
+  }, [presses.length, stopClosing, unitMs]);
+
+  const clear = useCallback((): void => {
+    stopClosing();
+    setClosed(false);
+    setPresses([]);
+    releasedAt.current = 0;
+  }, [stopClosing]);
+
+  // Leaving the screen must not leave a timer running over a screen that has
+  // gone.
+  useEffect(() => stopClosing, [stopClosing]);
+
+  return (
+    <AppFrame active="tap" onSelect={onSelectTab} unavailable={unavailableTabs}>
+      <View style={[styles.screen, { paddingTop: insets.top }]} testID="tap-screen">
+        <View style={styles.header}>
+          <Text style={styles.wordmark}>{t('nav.tap')}</Text>
+          {presses.length === 0 ? null : (
+            <Pressable
+              testID="tap-clear"
+              accessibilityRole="button"
+              accessibilityLabel="tap-clear"
+              onPress={clear}
+              style={styles.clear}
+            >
+              <Text style={styles.clearLabel}>{t('tap.clear')}</Text>
+            </Pressable>
+          )}
+        </View>
+
+        <View style={styles.body}>
+          {/* The card, the letter row and the cut-off SCROLL. The channel
+              strip, Emit and the key do not: they are the controls, and a
+              screen where you have to go looking for the key is not a key.
+              This is the Translator's arrangement, for the same reason. */}
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+            <Card>
+              <View style={styles.cardHead}>
+                <Text style={styles.label}>{t('tap.decoded')}</Text>
+                <View style={styles.cardActions}>
+                  {/* Offered only once there is something to read, and only while
+                  the setting allows it — the same switch that governs the
+                  Translator's, because it is the same promise. */}
+                  {presses.length === 0 ? null : (
+                    <Pressable
+                      testID="tap-back"
+                      accessibilityRole="button"
+                      accessibilityLabel="tap-back"
+                      onPress={back}
+                      style={({ pressed }) => [
+                        styles.back,
+                        pressed && styles.readPressed,
+                      ]}
+                    >
+                      <Icon
+                        name="backspace"
+                        size={19}
+                        color={theme.color.muted}
+                        strokeWidth={1.9}
+                      />
+                    </Pressable>
+                  )}
+                  {text === '' || !settings.speakDecoded ? null : (
+                    <Pressable
+                      testID="tap-read"
+                      accessibilityRole="button"
+                      accessibilityLabel="tap-read"
+                      onPress={readAloud}
+                      style={({ pressed }) => [
+                        styles.read,
+                        pressed && styles.readPressed,
+                      ]}
+                    >
+                      <Icon
+                        name="volume"
+                        size={15}
+                        color={theme.color.accent}
+                        strokeWidth={2}
+                      />
+                      <Text style={styles.readLabel}>{t('tap.read')}</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+              {showSurface ? (
+                <SignalSurface lit={playback.screenLit} />
+              ) : text === '' ? (
+                <Text testID="tap-empty" style={styles.emptyHint}>
+                  {t('tap.placeholder')}
+                </Text>
+              ) : (
+                <Text testID="tap-decoded" style={styles.decoded}>
+                  {text}
+                </Text>
+              )}
+              <View style={styles.monoFooter}>
+                <Text testID="tap-morse" style={styles.mono}>
+                  {morse}
+                </Text>
+              </View>
+            </Card>
+
+            {/* With the message they act on, not pinned below it. The strip is
+                what makes the feature findable — a tester who could not see
+                Vibrate did not know it was there — and it is visible without
+                scrolling on every screen size. Emit sits under it, one short
+                scroll away on the smallest. */}
+            {/* ⚠️ Beside the strip that raised it. Light is the only channel
+                behind a permission, and a refusal used to leave the chip dark
+                with nothing said. */}
+            <Toast
+              visible={lightDenied}
+              icon="zap"
+              message={t('channels.lightDenied')}
+              onDismiss={dismissLightDenied}
+              action={{
+                label: t('channels.openSettings'),
+                onPress: () => {
+                  void permission.openSettings();
+                },
+              }}
+            />
+            <OutputChannels cells={cells} />
+            <View style={styles.actions}>
+              <SignalButton
+                playing={playback.playing}
+                canPlay={playback.canPlay}
+                onPress={playback.playing ? playback.stop : playback.play}
+                label={playback.playing ? t('translator.stop') : t('translator.play')}
+              />
+            </View>
+            {/* ⚠️ BELOW the button, not standing in for the decoded text. It
+                used to fill the card while the message was empty, which put a
+                rule about the KEY where the MESSAGE goes — and it vanished the
+                moment the first dot was keyed, which is when it is still worth
+                reading. Here it sits with the key it describes and stays. */}
+            <Text testID="tap-hint" style={styles.keyingHint}>
+              {t('tap.hint')}
+            </Text>
+          </ScrollView>
+
+          {/* The only thing besides the key that does not scroll. These are
+              the marks of the press being made RIGHT NOW — feedback on the
+              primary interaction, useless the moment it is off screen.
+
+              ⚠️ Everything else was pinned once and it did not fit: on a 320dp
+              emulator the scrolling region came out about 70pt, clipping the
+              decoded text mid-word and leaving too little room for a swipe to
+              even register. A screen can only have so many things that must
+              always be visible, and on this one they are the key and this. */}
+          <Toast
+            visible={playback.lowVolume}
+            message={t('translator.volumeLow')}
+            onDismiss={playback.dismissLowVolume}
+          />
+          <View style={styles.letterRow}>
+            <Text style={styles.label}>{t('tap.letter')}</Text>
+            <View style={styles.marks} testID="tap-letter">
+              {shown.length === 0 ? (
+                <>
+                  <View style={[styles.dot, styles.markEmpty]} />
+                  <View style={[styles.dash, styles.markEmpty]} />
+                </>
+              ) : (
+                shown.map((mark, index) => (
+                  <View
+                    key={`m${String(index)}`}
+                    testID={mark === '.' ? 'tap-mark-dot' : 'tap-mark-dash'}
+                    style={[mark === '.' ? styles.dot : styles.dash, styles.markOn]}
+                  />
+                ))
+              )}
+            </View>
+          </View>
+
+          {/* Gone while the message is going out, and it buys most of the
+              screen back: the key is 186pt of a phone's height and there is
+              nothing to key at that moment. It is also the one control that
+              would ruin the run — a press changes the decoded text, the
+              message derived from it, and the playback effect keyed on that
+              message tears the run down mid-transmission. */}
+          {playback.playing ? null : (
+            <View style={styles.keyStage}>
+              <Pressable
+                testID="tap-key"
+                accessibilityRole="button"
+                accessibilityLabel="tap-key"
+                accessibilityState={{ selected: down }}
+                onPressIn={onDown}
+                onPressOut={onUp}
+                style={[styles.key, down && styles.keyDown]}
+              >
+                {/* A dot and a dash on the key itself: the two things it
+                    makes, drawn at the size the output draws them. */}
+                {/* ⚠️ While the key is DOWN, one of these is the mark you are
+                    currently making and the other is dimmed. Released, both
+                    sit at full strength — the key is offering both again. */}
+                <View style={styles.keyMarks}>
+                  <View
+                    testID="tap-key-dot"
+                    style={[
+                      styles.keyDot,
+                      down && (holdingDash ? styles.keyMarkIdle : styles.keyMarkLive),
+                    ]}
+                  />
+                  <View
+                    testID="tap-key-dash"
+                    style={[
+                      styles.keyDash,
+                      down && (holdingDash ? styles.keyMarkLive : styles.keyMarkIdle),
+                    ]}
+                  />
+                </View>
+                <Text style={styles.keyLabel}>{t('tap.key')}</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      </View>
+    </AppFrame>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: theme.color.ground },
+  cardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    // The button is taller than the label it sits beside; the negative margin
+    // keeps its touch target 44pt without pushing the card open.
+    marginVertical: -6,
+    marginRight: -6,
+    minHeight: 44,
+  },
+  read: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    height: 44,
+    paddingHorizontal: 12,
+  },
+  readPressed: { opacity: 0.6 },
+  cardActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  readLabel: { ...theme.type.chip, color: theme.color.accent },
+  header: {
+    height: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.gutter,
+  },
+  wordmark: { ...theme.type.wordmark, color: theme.color.ink },
+  clear: {
+    height: theme.hitTarget,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
+    marginRight: -theme.spacing.md,
+  },
+  clearLabel: { ...theme.type.chip, color: theme.color.accent },
+  body: {
+    flex: 1,
+    paddingHorizontal: theme.gutter,
+    paddingTop: 10,
+    gap: theme.spacing.md,
+  },
+  label: {
+    ...theme.type.label,
+    color: theme.color.faint,
+    marginBottom: theme.spacing.sm,
+  },
+  emptyHint: { ...theme.type.body, fontSize: 17, lineHeight: 24, color: '#b3bac2' },
+  decoded: {
+    ...theme.type.decoded,
+    fontSize: 26,
+    lineHeight: 32,
+    color: theme.color.ink,
+  },
+  monoFooter: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.color.border,
+    paddingTop: theme.spacing.md,
+    marginTop: theme.spacing.md,
+  },
+  mono: { ...theme.type.mono, color: theme.color.muted },
+  letterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+    height: 56,
+    paddingHorizontal: 18,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.control,
+  },
+  marks: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  dash: { width: 26, height: 10, borderRadius: 5 },
+  markOn: { backgroundColor: theme.color.accent },
+  markEmpty: { backgroundColor: '#e2e6ea' },
+  // The part that gives way when there is more than fits: the card, the letter
+  // row and the cut-off. `flexGrow` rather than `flex` so a short message
+  // still fills the space instead of bunching at the top — the same
+  // distinction the Translator's card region turns on.
+  scroll: { flex: 1 },
+  scrollContent: { flexGrow: 1, gap: theme.spacing.md },
+  // Away from the channel strip above it, so the button reads as the thing
+  // that acts rather than the last cell in the row.
+  actions: { flexDirection: 'row', paddingTop: theme.spacing.md },
+  keyingHint: {
+    ...theme.type.hint,
+    color: theme.color.muted,
+    textAlign: 'center',
+    paddingTop: theme.spacing.md,
+  },
+  keyStage: {
+    // No `flex: 1` now that something above it scrolls: the key takes the room
+    // it needs and the scrolling region takes the rest. Left as flex it would
+    // compete with the scroll view for the same space.
+    alignItems: 'center',
+    justifyContent: 'center',
+    // ⚠️ Room on BOTH sides of the key. It sat hard against the letter row
+    // above it, so the two read as one block and the key looked like part of
+    // the readout rather than the thing you press.
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.lg,
+  },
+  /**
+   * A 186pt disc, per `design/screens/TapDecode.dc.html`.
+   *
+   * It was a full-width rounded rectangle until Rogério asked twice for it to
+   * be narrower — the artboard had settled this and the screen had drifted.
+   * The ring is the design's, and it is what makes a flat disc read as a key
+   * rather than a circle drawn on the page.
+   */
+  key: {
+    width: KEY_SIZE,
+    height: KEY_SIZE,
+    borderRadius: KEY_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: theme.color.accent,
+    boxShadow: [
+      {
+        offsetX: 0,
+        offsetY: 0,
+        blurRadius: 0,
+        spreadDistance: 10,
+        color: 'rgba(18, 165, 148, 0.12)',
+      },
+      { offsetX: 0, offsetY: 14, blurRadius: 34, color: 'rgba(18, 165, 148, 0.32)' },
+    ],
+  },
+  // The artboard's :active state, which has no CSS equivalent here.
+  keyDown: {
+    transform: [{ scale: 0.965 }],
+    boxShadow: [
+      {
+        offsetX: 0,
+        offsetY: 0,
+        blurRadius: 0,
+        spreadDistance: 12,
+        color: 'rgba(18, 165, 148, 0.16)',
+      },
+      { offsetX: 0, offsetY: 6, blurRadius: 16, color: 'rgba(18, 165, 148, 0.28)' },
+    ],
+  },
+  keyMarks: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm },
+  keyDot: {
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    backgroundColor: theme.color.onAccent,
+  },
+  keyDash: {
+    width: 36,
+    height: 13,
+    borderRadius: 7,
+    backgroundColor: theme.color.onAccent,
+  },
+  // The mark being made, against the one that is not. Opacity rather than a
+  // second colour: the key is already the accent, and a third hue on it would
+  // read as a state rather than as emphasis.
+  keyMarkLive: { opacity: 1 },
+  keyMarkIdle: { opacity: 0.28 },
+  keyLabel: { ...theme.type.control, color: theme.color.onAccent },
+});

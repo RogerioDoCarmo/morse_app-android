@@ -1,0 +1,44 @@
+export type { ITorchPort } from './ITorchPort';
+export type { IAudioPlaybackPort } from './IAudioPlaybackPort';
+export type { IKeepAwakePort } from './IKeepAwakePort';
+export type { IVibrationPort, VibrationMark } from './IVibrationPort';
+export type { IVolumePort } from './IVolumePort';
+export type { IPreferencesPort } from './IPreferencesPort';
+export type { ITextToSpeechPort } from './ITextToSpeechPort';
+export type { ISpeechRecognitionPort, SpeechResult } from './ISpeechRecognitionPort';
+export type { ILocalePort } from './ILocalePort';
+export type { IPermissionPort } from './IPermissionPort';
+export type { IClipboardPort } from './IClipboardPort';
+
+import type { ILocalePort } from './ILocalePort';
+import type { IPermissionPort } from './IPermissionPort';
+import type { ISpeechRecognitionPort } from './ISpeechRecognitionPort';
+import type { ITextToSpeechPort } from './ITextToSpeechPort';
+import type { ITorchPort } from './ITorchPort';
+import type { IAudioPlaybackPort } from './IAudioPlaybackPort';
+import type { IKeepAwakePort } from './IKeepAwakePort';
+import type { IVibrationPort } from './IVibrationPort';
+import type { IVolumePort } from './IVolumePort';
+import type { IPreferencesPort } from './IPreferencesPort';
+import type { IClipboardPort } from './IClipboardPort';
+import type { ICrashReportingPort } from './ICrashReportingPort';
+
+/**
+ * Everything the UI layer is allowed to reach the outside world through.
+ *  Injected once at the root; screens and hooks never import an adapter.
+ */
+export type Ports = Readonly<{
+  torch: ITorchPort;
+  audio: IAudioPlaybackPort;
+  keepAwake: IKeepAwakePort;
+  vibration: IVibrationPort;
+  volume: IVolumePort;
+  preferences: IPreferencesPort;
+  tts: ITextToSpeechPort;
+  speech: ISpeechRecognitionPort;
+  locale: ILocalePort;
+  permission: IPermissionPort;
+  clipboard: IClipboardPort;
+  crash: ICrashReportingPort;
+}>;
+export type { ICrashReportingPort } from './ICrashReportingPort';

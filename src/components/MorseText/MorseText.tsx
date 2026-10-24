@@ -1,0 +1,185 @@
+import React, { useMemo } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ChipProgressRing } from '@/components/ChipProgressRing';
+import { TapHalo } from '@/components/TapHalo';
+import type { MorseMessage } from '@/core/domain/morse';
+import { theme } from '@/theme';
+
+type Props = Readonly<{
+  /** The message to render. */
+  message: MorseMessage;
+  /** Index of the selected letter, counted across the whole message. */
+  selectedIndex?: number | null;
+  /**
+   * Index of the letter the playhead is on, or null when nothing is playing.
+   * Letters before it read as already played, which is what turns the output
+   * itself into the progress indicator.
+   */
+  soundingIndex?: number | null;
+  /** Called with that same flat index when a letter is pressed. */
+  onSelectLetter?: (index: number) => void;
+  /**
+   * Index of the letter that should point at itself, or null for none.
+   *
+   * ⚠️ FOR THE CHIPS' ONE UNDISCOVERABLE TRICK. Tapping a chip plays that
+   * letter on its own, and a tester used 0.3.4 without ever finding out — past
+   * the card header that says so and past the guide slide that says so. A
+   * pressable that looks like a label is invisible until something moves.
+   */
+  hintIndex?: number | null;
+  /**
+   * Which hint the chip at {@link hintIndex} wears.
+   *
+   * `breathe` is the app's own nudge — {@link TapHalo}, four beats then rest.
+   *
+   * ⚠️ `progress` is for the FIRST-RUN GUIDE ONLY. It turns for twenty
+   * revolutions, which is a summons rather than a nudge, and it is confined to
+   * the one screen whose job is teaching that the chips are pressable. Using it
+   * in the app proper would put a travelling ring on a chip every time a
+   * message is typed.
+   */
+  hintVariant?: 'breathe' | 'progress';
+  /**
+   * Handed the sounding letter's own view, each time the playhead moves.
+   *
+   * ⚠️ The VIEW, not a position. Where a chip sits depends on how the words
+   * wrapped, and on a phone these chips are several containers deep inside a
+   * scroll view that belongs to the screen, not to this component. Only the
+   * owner of that scroll view can turn a chip into an offset, so this hands
+   * over the thing to measure rather than a number measured against the wrong
+   * origin.
+   */
+  onSoundingLetter?: (view: View | null) => void;
+  /** Test identifier. Also the Maestro selector — never assert on localised text. */
+  testID?: string;
+}>;
+
+/**
+ * Renders a Morse message as dots and dashes.
+ *
+ * Words are separated by a visibly larger gap than the wrap gap inside a word,
+ * because the silences carry as much information as the marks do: without that
+ * difference a wrapped word reads as two words.
+ */
+export function MorseText({
+  message,
+  selectedIndex = null,
+  soundingIndex = null,
+  onSelectLetter,
+  onSoundingLetter,
+  hintIndex = null,
+  hintVariant = 'breathe',
+  testID = 'morse-output',
+}: Props): React.JSX.Element {
+  // Each word's starting index, computed before render rather than by mutating
+  // a counter inside the map — React may re-enter the callback.
+  const wordOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let running = 0;
+    for (const word of message.words) {
+      offsets.push(running);
+      running += word.letters.length;
+    }
+    return offsets;
+  }, [message]);
+
+  return (
+    <View
+      testID={testID}
+      accessibilityLabel={testID}
+      accessible={false}
+      style={styles.message}
+    >
+      {message.words.map((word, wordIndex) => (
+        <View key={`w${String(wordIndex)}`} style={styles.word}>
+          {word.letters.map((letter, letterIndex) => {
+            const index = (wordOffsets[wordIndex] ?? 0) + letterIndex;
+            // Playback owns the highlight while it runs: a selection left over
+            // from a tap would otherwise sit lit in the middle of a message.
+            const playing = soundingIndex !== null;
+            const played = playing && index < soundingIndex;
+            const lit = playing ? index === soundingIndex : selectedIndex === index;
+            const markColor = lit ? theme.color.onAccent : theme.color.accent;
+            return (
+              <Pressable
+                key={`l${String(letterIndex)}`}
+                // ⚠️ Handed over only for the letter that is SOUNDING. A ref
+                // on every chip would fire on every render of a long message
+                // and hand the screen whichever one settled last.
+                ref={
+                  playing && index === soundingIndex
+                    ? (node) => onSoundingLetter?.(node)
+                    : null
+                }
+                testID="morse-letter"
+                accessibilityRole="button"
+                accessibilityState={{ selected: lit }}
+                accessibilityLabel={`morse-letter-${letter.char}`}
+                onPress={() => onSelectLetter?.(index)}
+                style={[
+                  styles.letter,
+                  played && styles.letterPlayed,
+                  lit && styles.letterSelected,
+                ]}
+              >
+                {/* Behind the marks and outside the layout — see TapHalo.
+                    Never while this chip is lit: the highlight is already
+                    saying "this one", and two signals on one chip read as a
+                    state rather than as an invitation. */}
+                {hintIndex === index && !lit ? (
+                  hintVariant === 'progress' ? (
+                    <ChipProgressRing />
+                  ) : (
+                    <TapHalo />
+                  )
+                ) : null}
+                <View style={styles.marks}>
+                  {letter.symbols.map((symbol, symbolIndex) => (
+                    <View
+                      key={`s${String(symbolIndex)}`}
+                      style={[
+                        symbol === '.' ? styles.dot : styles.dash,
+                        { backgroundColor: markColor },
+                      ]}
+                    />
+                  ))}
+                </View>
+                <Text
+                  style={
+                    lit ? styles.charSelected : played ? styles.charPlayed : styles.char
+                  }
+                >
+                  {letter.char}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  message: { flexDirection: 'column', gap: theme.spacing.lg },
+  word: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm },
+  letter: {
+    minWidth: theme.hitTarget,
+    minHeight: theme.hitTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: theme.radius.control,
+    backgroundColor: theme.color.groundAlt,
+  },
+  letterSelected: { backgroundColor: theme.color.accent },
+  letterPlayed: { backgroundColor: theme.color.accentTint },
+  marks: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 8 },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  dash: { width: 21, height: 8, borderRadius: 4 },
+  char: { ...theme.type.letter, color: theme.color.muted },
+  charSelected: { ...theme.type.letter, color: theme.color.onAccent },
+  charPlayed: { ...theme.type.letter, color: theme.color.accentDeep },
+});

@@ -1,0 +1,128 @@
+{
+  "expo": {
+    "name": "OmniMorse",
+    "slug": "morse-app",
+    "owner": "rogeriodocarmo",
+    "version": "0.3.7",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "morseapp",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.rogeriodocarmo.morse",
+      "infoPlist": {
+        "NSCameraUsageDescription": "OmniMorse switches the camera flash on and off to play a message as light. The camera preview is never opened and no image is captured.",
+        "NSMicrophoneUsageDescription": "OmniMorse listens so it can turn what you say into Morse code. The app never stores your audio. The recognition itself is done by iOS, which may send it to Apple to transcribe.",
+        "NSSpeechRecognitionUsageDescription": "OmniMorse turns what you say into text so it can be encoded as Morse code. iOS decides whether to do that on the device or by sending your audio to Apple.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "OmniMorse never opens your photo library. This is declared only because the camera component that switches the torch on and off references it."
+      },
+      "privacyManifests": {
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "CA92.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "C617.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryDiskSpace",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "E174.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "35F9.1"
+            ]
+          }
+        ],
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyCollectedDataTypes": [
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeCrashData",
+            "NSPrivacyCollectedDataTypeLinked": false,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeDeviceID",
+            "NSPrivacyCollectedDataTypeLinked": false,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          }
+        ]
+      }
+    },
+    "android": {
+      "package": "com.rogeriodocarmo.morse",
+      "adaptiveIcon": {
+        "backgroundColor": "#F5F6F8",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-localization",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#F5F6F8",
+          "dark": {
+            "backgroundColor": "#F5F6F8"
+          }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "OmniMorse switches the camera flash on and off to play a message as light.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-font",
+      "./plugins/withCleanAndroidPermissions.js"
+    ],
+    "experiments": {
+      "tsconfigPaths": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2868776d-8058-43b4-928b-44b5fa312998"
+      }
+    }
+  }
+}
