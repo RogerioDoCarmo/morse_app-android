@@ -1,0 +1,11 @@
+# Dependencies are installed at build time (pnpm install --frozen-lockfile,
+# hoisted layout per .npmrc) — never committed here.
+node_modules/
+
+# Build output and local machine state
+android/build/
+android/app/build/
+android/.gradle/
+android/.cxx/
+android/local.properties
+.DS_Store
